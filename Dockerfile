@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     libpq-dev \
+    cmake \
+    nasm \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy your source code
