@@ -1,0 +1,31 @@
+[package]
+name = "spoticord_bot"
+version = "2.2.6"
+edition = "2021"
+rust-version = "1.80.0"
+
+[dependencies]
+spoticord_config = { path = "../spoticord_config" }
+spoticord_database = { path = "../spoticord_database" }
+spoticord_player = { path = "../spoticord_player" }
+spoticord_session = { path = "../spoticord_session" }
+spoticord_utils = { path = "../spoticord_utils" }
+spoticord_stats = { path = "../spoticord_stats", optional = true }
+
+diesel = { version = "2.1.0", features = ["postgres"] }
+dotenvy = "0.15.7"
+env_logger = "0.11.5"
+log = "0.4.22"
+poise = "0.6.1"
+serenity = "0.12.2"
+songbird = { version = "0.4.4", features = ["simd-json"] }
+tokio = { version = "1.41.1", features = ["full"] }
+rustls = { version = "0.23.16", features = ["aws-lc-rs"] }
+anyhow = "1.0.93"
+librespot = { git = "https://github.com/SpoticordMusic/librespot.git", default-features = false }
+shuttle-runtime = "0.56"
+shuttle-serenity = "0.56"
+
+[[bin]]
+name = "spoticord"
+path = "src/main.rs"
