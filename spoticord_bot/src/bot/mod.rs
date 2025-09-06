@@ -51,12 +51,16 @@ pub async fn setup(
     info!("Successfully logged in as {}", ready.user.name);
 
     #[cfg(debug_assertions)]
-    poise::builtins::register_in_guild(
-        ctx,
-        &framework.options().commands,
-        std::env::var("GUILD_ID")?.parse()?,
-    )
-    .await?;
+    if let Ok(guild_id_str) = std::env::var("GUILD_ID") {
+        if let Ok(guild_id_num) = guild_id_str.parse() {
+            poise::builtins::register_in_guild(ctx, &framework.options().commands, guild_id_num)
+                .await?;
+        } else {
+            debug!("GUILD_ID present but not a valid number; skipping guild command registration");
+        }
+    } else {
+        debug!("GUILD_ID not set; skipping guild-scoped command registration (debug mode)");
+    }
 
     #[cfg(not(debug_assertions))]
     poise::builtins::register_globally(ctx, &framework.options().commands).await?;
@@ -68,7 +72,12 @@ pub async fn setup(
     let manager = SessionManager::new(songbird, database);
 
     #[cfg(feature = "spoticord_stats")]
-    let stats = StatsManager::new(spoticord_config::kv_url())?;
+    let stats = if let Some(url) = spoticord_config::kv_url_opt() {
+        Some(StatsManager::new(url)?)
+    } else {
+        debug!("KV_URL not set; stats manager disabled");
+        None
+    };
 
     tokio::spawn(background_loop(
         manager.clone(),
@@ -103,7 +112,7 @@ async fn event_handler(
 async fn background_loop(
     session_manager: SessionManager,
     shard_manager: Arc<ShardManager>,
-    #[cfg(feature = "spoticord_stats")] mut stats_manager: spoticord_stats::StatsManager,
+    #[cfg(feature = "spoticord_stats")] stats_manager: Option<spoticord_stats::StatsManager>,
 ) {
     #[cfg(feature = "spoticord_stats")]
     use log::error;
@@ -138,7 +147,7 @@ async fn background_loop(
                 shard_manager.shutdown_all().await;
 
                 #[cfg(feature = "spoticord_stats")]
-                stats_manager.set_active_count(0).ok();
+                if let Some(sm) = &stats_manager { sm.set_active_count(0).ok(); }
 
 
                 break;

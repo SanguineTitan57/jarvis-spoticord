@@ -7,6 +7,6 @@ pub fn run_migrations(connection: &mut PgConnection) -> Result<(), diesel::resul
     connection
         .run_pending_migrations(MIGRATIONS)
         .map(|_| ())
-    .map_err(|_| diesel::result::Error::RollbackTransaction)?; // coarse mapping
+        .map_err(|_| diesel::result::Error::RollbackTransaction)?; // coarse mapping
     Ok(())
 }

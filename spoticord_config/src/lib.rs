@@ -31,8 +31,12 @@ pub fn link_url() -> &'static str {
     &env::LINK_URL
 }
 
+pub fn kv_url_opt() -> Option<&'static str> {
+    env::KV_URL.as_deref()
+}
+
 pub fn kv_url() -> &'static str {
-    &env::KV_URL
+    kv_url_opt().expect("KV_URL not set")
 }
 
 pub fn get_spotify(token: Token) -> AuthCodeSpotify {

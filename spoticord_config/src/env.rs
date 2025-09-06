@@ -17,5 +17,4 @@ pub static SPOTIFY_CLIENT_SECRET: LazyLock<String> = LazyLock::new(|| {
 });
 
 // Locked behind `stats` feature
-pub static KV_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("KV_URL").expect("missing KV_URL environment variable"));
+pub static KV_URL: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("KV_URL").ok());

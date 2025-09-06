@@ -10,11 +10,11 @@ use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::PgConnection;
-use tokio::task;
 use error::*;
 use models::{Account, LinkRequest, User};
 use rand::{distributions::Alphanumeric, Rng};
 use rspotify::{clients::BaseClient, Token};
+use tokio::task;
 
 #[derive(Clone)]
 pub struct Database(Arc<Pool<ConnectionManager<PgConnection>>>);
@@ -25,8 +25,13 @@ impl Database {
     }
 
     pub async fn connect_with_url(database_url: &str) -> Result<Self> {
+        // Neon + sync diesel can encounter ephemeral prepared statement invalidation.
+        // Disable statement cache so diesel doesn't reuse dropped prepared statements.
+        std::env::set_var("DIESEL_STATEMENT_CACHE_SIZE", "0");
         let manager = ConnectionManager::<PgConnection>::new(database_url);
-    let pool = Pool::builder().build(manager).map_err(DatabaseError::from)?;
+        let pool = Pool::builder()
+            .build(manager)
+            .map_err(DatabaseError::from)?;
 
         // Run migrations in blocking thread
         {
@@ -37,7 +42,8 @@ impl Database {
                 Ok(())
             })
             .await
-            .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))??; // map join error
+            .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))??;
+            // map join error
         }
 
         Ok(Self(Arc::new(pool)))
@@ -215,11 +221,7 @@ impl Database {
                 .collect();
             let _expires = (Utc::now() + Duration::hours(1)).naive_utc();
             let request = diesel::insert_into(link_request)
-                .values((
-                    user_id.eq(&uid),
-                    token.eq(&_token),
-                    expires.eq(_expires),
-                ))
+                .values((user_id.eq(&uid), token.eq(&_token), expires.eq(_expires)))
                 .on_conflict(user_id)
                 .do_update()
                 .set((token.eq(&_token), expires.eq(_expires)))
