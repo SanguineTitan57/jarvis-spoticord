@@ -12,7 +12,7 @@ use spoticord_utils::discord::Colors;
 
 use crate::bot::Context;
 
-/// Join the current voice channel
+/// Join the Spotify voice channel
 #[poise::command(slash_command, guild_only)]
 pub async fn join(ctx: Context<'_>) -> Result<()> {
     let guild = ctx.guild_id().expect("poise lied to me");
@@ -39,25 +39,8 @@ pub async fn join(ctx: Context<'_>) -> Result<()> {
         return Ok(());
     };
 
-    let Some(channel) = guild
-        .voice_states
-        .get(&ctx.author().id)
-        .and_then(|state| state.channel_id)
-    else {
-        ctx.send(
-            CreateReply::default()
-                .embed(
-                    CreateEmbed::new()
-                        .title("Cannot join voice channel")
-                        .description("You need to connect to a voice channel before running /join")
-                        .color(Colors::Error),
-                )
-                .ephemeral(true),
-        )
-        .await?;
-
-        return Ok(());
-    };
+    // Hardcoded Spotify voice channel ID
+    let channel = ChannelId::new(1389725458488360970);
 
     if !has_voice_permissions(ctx, channel).await? {
         ctx.send(
@@ -120,48 +103,6 @@ pub async fn join(ctx: Context<'_>) -> Result<()> {
     }
 
     let mut session_opt = manager.get_session(SessionQuery::Guild(guild.id));
-
-    // Check if this server already has a session active
-    if let Some(session) = &session_opt {
-        if session.active().await? {
-            ctx.send(
-                CreateReply::default()
-                    .embed(
-                        CreateEmbed::new()
-                            .title("Spoticord is busy")
-                            .description("Spoticord is already being used in this server.")
-                            .color(Colors::Error),
-                    )
-                    .ephemeral(true),
-            )
-            .await?;
-
-            return Ok(());
-        }
-    }
-
-    // Prevent the user from using Spoticord simultaneously in multiple servers
-    if let Some(session) = manager.get_session(SessionQuery::Owner(ctx.author().id)) {
-        let server_name = session.guild().to_partial_guild(&ctx).await?.name;
-
-        ctx.send(
-            CreateReply::default()
-                .embed(
-                    CreateEmbed::new()
-                        .title("You are already using Spoticord")
-                        .description(format!(
-                            "You are already using Spoticord in `{}`\n\n\
-                            Stop playing in that server first before starting a new session.",
-                            spoticord_utils::discord::escape(server_name)
-                        ))
-                        .color(Colors::Error),
-                )
-                .ephemeral(true),
-        )
-        .await?;
-
-        return Ok(());
-    }
 
     ctx.defer().await?;
 
@@ -232,10 +173,13 @@ pub async fn join(ctx: Context<'_>) -> Result<()> {
         CreateReply::default().embed(
             CreateEmbed::new()
                 .author(
-                    CreateEmbedAuthor::new("Connected to voice channel")
+                    CreateEmbedAuthor::new("Connected to Spotify voice channel")
                         .icon_url("https://spoticord.com/speaker.png"),
                 )
-                .description(format!("Come listen along in <#{}>", channel))
+                .description(format!(
+                    "Bot is now permanently connected to <#{}>",
+                    channel
+                ))
                 .footer(CreateEmbedFooter::new(
                     "You must manually select your device in Spotify",
                 ))

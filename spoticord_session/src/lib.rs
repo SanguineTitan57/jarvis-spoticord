@@ -205,7 +205,7 @@ impl Session {
             .await
             .ok();
 
-        let mut session = Self {
+        let session = Self {
             session_manager,
 
             context: context.to_owned(),
@@ -229,7 +229,8 @@ impl Session {
             playback_embed: None,
             lyrics_embed: None,
         };
-        session.start_timeout();
+        // Disable automatic timeout for persistent session
+        // session.start_timeout();
 
         tokio::spawn(session.run());
 
@@ -347,7 +348,10 @@ impl Session {
     async fn handle_event(&mut self, event: PlayerEvent) {
         match event {
             PlayerEvent::Play => self.stop_timeout(),
-            PlayerEvent::Pause => self.start_timeout(),
+            PlayerEvent::Pause => {
+                // Disable timeout on pause for persistent session
+                // self.start_timeout()
+            }
             PlayerEvent::Stopped => self.shutdown_player().await,
             PlayerEvent::TrackChanged(_) => {}
             PlayerEvent::ConnectionReset => {
@@ -502,7 +506,8 @@ impl Session {
 
     async fn shutdown_player(&mut self) {
         self.player.shutdown().await;
-        self.start_timeout();
+        // Disable timeout on player shutdown for persistent session
+        // self.start_timeout();
 
         self.active = false;
 
@@ -685,7 +690,10 @@ impl songbird::EventHandler for SessionHandle {
                 self.disconnect().await;
             }
 
-            EventContext::ClientDisconnect(ClientDisconnect { user_id }) => {
+            EventContext::ClientDisconnect(ClientDisconnect { user_id: _ }) => {
+                // For persistent session, ignore user disconnects - keep playing
+                // The original behavior was to stop playback when owner leaves
+                /*
                 // Ignore disconnects if we're inactive
                 if !self.active().await.unwrap_or(false) {
                     return None;
@@ -699,6 +707,7 @@ impl songbird::EventHandler for SessionHandle {
                     }
                     _ => {}
                 }
+                */
             }
             _ => {}
         }
