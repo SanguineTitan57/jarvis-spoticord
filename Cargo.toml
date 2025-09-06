@@ -33,6 +33,11 @@ spoticord_stats = { path = "./spoticord_stats", optional = true }
 
 librespot = { git = "https://github.com/SpoticordMusic/librespot.git", default-features = false }
 anyhow = "1.0.93"
+diesel = { version = "2.1.0", features = ["postgres"] }
+diesel-async = { version = "0.4.1", features = [
+    "postgres",
+    "tokio-postgres-rustls",
+] }
 dotenvy = "0.15.7"
 env_logger = "0.11.5"
 log = "0.4.22"

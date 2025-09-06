@@ -4,14 +4,16 @@ mod commands;
 use log::{error, info};
 use poise::Framework;
 use serenity::all::ClientBuilder;
+use shuttle_runtime::{SecretStore, ShuttleResult};
+use shuttle_serenity::ShuttleSerenity;
 use songbird::SerenityInit;
 use spoticord_database::Database;
 
-#[tokio::main]
-async fn main() {
+#[shuttle_runtime::main]
+async fn main(
+    #[shuttle_runtime::Secrets] secret_store: SecretStore,
+) -> ShuttleResult<ShuttleSerenity> {
     // Force aws-lc-rs as default crypto provider
-    // Since multiple dependencies either enable aws_lc_rs or ring, they cause a clash, so we have to
-    // explicitly tell rustls to use the aws-lc-rs provider
     _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // Setup logging
@@ -22,31 +24,47 @@ async fn main() {
         #[cfg(not(debug_assertions))]
         std::env::set_var("RUST_LOG", "spoticord=info");
     }
-
     env_logger::init();
 
     info!("Today is a good day!");
     info!(" - Spoticord");
 
-    dotenvy::dotenv().ok();
+    // --- Load secrets from Shuttle ---
+    let discord_token = secret_store
+        .get("DISCORD_TOKEN")
+        .expect("Missing DISCORD_TOKEN");
+    let database_url = secret_store
+        .get("DATABASE_URL")
+        .expect("Missing DATABASE_URL");
+    let link_url = secret_store
+        .get("LINK_URL")
+        .expect("Missing LINK_URL");
+    let spotify_client_id = secret_store
+        .get("SPOTIFY_CLIENT_ID")
+        .expect("Missing SPOTIFY_CLIENT_ID");
+    let spotify_client_secret = secret_store
+        .get("SPOTIFY_CLIENT_SECRET")
+        .expect("Missing SPOTIFY_CLIENT_SECRET");
 
-    // Set up database
-    let database = match Database::connect().await {
+    // --- Database connection ---
+    let database = match Database::connect_with_url(&database_url).await {
         Ok(db) => db,
         Err(why) => {
             error!("Failed to connect to database and perform migrations: {why}");
-            return;
+            panic!("Database connection failed");
         }
     };
 
-    // Set up bot
+    // --- Setup bot framework ---
     let framework = Framework::builder()
-        .setup(|ctx, ready, framework| Box::pin(bot::setup(ctx, ready, framework, database)))
+        .setup(|ctx, ready, framework| {
+            Box::pin(bot::setup(ctx, ready, framework, database))
+        })
         .options(bot::framework_opts())
         .build();
 
-    let mut client = match ClientBuilder::new(
-        spoticord_config::discord_token(),
+    let client = match ClientBuilder::new(
+        &discord_token,
         spoticord_config::discord_intents(),
     )
     .framework(framework)
@@ -56,12 +74,9 @@ async fn main() {
         Ok(client) => client,
         Err(why) => {
             error!("Fatal error when building Serenity client: {why}");
-            return;
+            panic!("Bot init failed");
         }
     };
 
-    if let Err(why) = client.start_autosharded().await {
-        error!("Fatal error occured during bot operations: {why}");
-        error!("Bot will now shut down!");
-    }
+    Ok(client.into())
 }
