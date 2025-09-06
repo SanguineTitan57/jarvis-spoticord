@@ -7,6 +7,7 @@ use serenity::all::ClientBuilder;
 use shuttle_runtime::SecretStore;
 use songbird::SerenityInit;
 use spoticord_database::Database;
+use std::env;
 
 #[shuttle_runtime::main]
 async fn main(
@@ -22,43 +23,50 @@ async fn main(
         std::env::set_var("RUST_LOG", "spoticord=info");
     }
 
-    env_logger::init();
+    // Shuttle runtime already installs a global tracing/logging subscriber.
+    // Using init() after another logger is set causes a panic (SetLoggerError).
+    // try_init() will silently ignore if a logger is already installed.
+    let _ = env_logger::try_init();
 
     info!("Today is a good day!");
     info!(" - Spoticord");
 
     // --- Load secrets ---
-    let discord_token = secret_store
-        .get("DISCORD_TOKEN")
-        .expect("Missing DISCORD_TOKEN");
-    let database_url = secret_store
-        .get("DATABASE_URL")
-        .expect("Missing DATABASE_URL");
-    let link_url = secret_store.get("LINK_URL").expect("Missing LINK_URL");
-    let spotify_client_id = secret_store
-        .get("SPOTIFY_CLIENT_ID")
-        .expect("Missing SPOTIFY_CLIENT_ID");
-    let spotify_client_secret = secret_store
-        .get("SPOTIFY_CLIENT_SECRET")
-        .expect("Missing SPOTIFY_CLIENT_SECRET");
+    // Load .env for local dev fallbacks
+    let _ = dotenvy::dotenv();
 
-    // Optional secrets
-    let kv_url = secret_store.get("KV_URL");
-    let guild_id = secret_store.get("GUILD_ID");
+    // Helper closure to fetch a key from SecretStore if present else env
+    let get_secret = |key: &str| -> Option<String> {
+        if let Some(v) = secret_store.get(key) {
+            return Some(v);
+        }
+        env::var(key).ok()
+    };
+
+    let discord_token = get_secret("DISCORD_TOKEN").expect("Missing DISCORD_TOKEN");
+    let database_url = get_secret("DATABASE_URL").expect("Missing DATABASE_URL");
+    let link_url = get_secret("LINK_URL").expect("Missing LINK_URL");
+    let spotify_client_id = get_secret("SPOTIFY_CLIENT_ID").expect("Missing SPOTIFY_CLIENT_ID");
+    let spotify_client_secret =
+        get_secret("SPOTIFY_CLIENT_SECRET").expect("Missing SPOTIFY_CLIENT_SECRET");
+
+    // Optional
+    let kv_url = get_secret("KV_URL");
+    let guild_id = get_secret("GUILD_ID");
 
     // --- Set environment variables for spoticord_config ---
-    std::env::set_var("DISCORD_TOKEN", &discord_token);
-    std::env::set_var("DATABASE_URL", &database_url);
-    std::env::set_var("LINK_URL", &link_url);
-    std::env::set_var("SPOTIFY_CLIENT_ID", &spotify_client_id);
-    std::env::set_var("SPOTIFY_CLIENT_SECRET", &spotify_client_secret);
+    env::set_var("DISCORD_TOKEN", &discord_token);
+    env::set_var("DATABASE_URL", &database_url);
+    env::set_var("LINK_URL", &link_url);
+    env::set_var("SPOTIFY_CLIENT_ID", &spotify_client_id);
+    env::set_var("SPOTIFY_CLIENT_SECRET", &spotify_client_secret);
 
     // Set optional environment variables if they exist
     if let Some(kv_url) = kv_url {
-        std::env::set_var("KV_URL", kv_url);
+        env::set_var("KV_URL", kv_url);
     }
     if let Some(guild_id) = guild_id {
-        std::env::set_var("GUILD_ID", guild_id);
+        env::set_var("GUILD_ID", guild_id);
     }
 
     // --- Database connection ---

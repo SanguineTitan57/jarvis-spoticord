@@ -8,37 +8,37 @@ use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use diesel::prelude::*;
-use diesel_async::{
-    pooled_connection::{deadpool::Pool, AsyncDieselConnectionManager},
-    AsyncPgConnection, RunQueryDsl,
-};
+use diesel::r2d2::{ConnectionManager, Pool};
+use diesel::PgConnection;
+use tokio::task;
 use error::*;
 use models::{Account, LinkRequest, User};
 use rand::{distributions::Alphanumeric, Rng};
 use rspotify::{clients::BaseClient, Token};
 
 #[derive(Clone)]
-pub struct Database(Arc<Pool<AsyncPgConnection>>);
+pub struct Database(Arc<Pool<ConnectionManager<PgConnection>>>);
 
 impl Database {
     pub async fn connect() -> Result<Self> {
-        let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(
-            spoticord_config::database_url(),
-        );
-        let pool = Pool::builder(config).build()?;
-
-        let mut conn = pool.get().await?;
-        migrations::run_migrations(&mut conn).await?;
-
-        Ok(Self(Arc::new(pool)))
+        Self::connect_with_url(&spoticord_config::database_url()).await
     }
 
     pub async fn connect_with_url(database_url: &str) -> Result<Self> {
-        let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url);
-        let pool = Pool::builder(config).build()?;
+        let manager = ConnectionManager::<PgConnection>::new(database_url);
+    let pool = Pool::builder().build(manager).map_err(DatabaseError::from)?;
 
-        let mut conn = pool.get().await?;
-        migrations::run_migrations(&mut conn).await?;
+        // Run migrations in blocking thread
+        {
+            let pool_clone = pool.clone();
+            task::spawn_blocking(move || -> Result<()> {
+                let mut conn = pool_clone.get().map_err(DatabaseError::from)?;
+                migrations::run_migrations(&mut conn).map_err(DatabaseError::from)?;
+                Ok(())
+            })
+            .await
+            .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))??; // map join error
+        }
 
         Ok(Self(Arc::new(pool)))
     }
@@ -48,39 +48,51 @@ impl Database {
     pub async fn get_user(&self, user_id: impl AsRef<str>) -> Result<User> {
         use schema::user::dsl::*;
 
-        let mut connection = self.0.get().await?;
-        let result = user
-            .filter(id.eq(user_id.as_ref()))
-            .select(User::as_select())
-            .first(&mut connection)
-            .await?;
-
-        Ok(result)
+        let pool = self.0.clone();
+        let uid = user_id.as_ref().to_string();
+        task::spawn_blocking(move || -> Result<User> {
+            let mut connection = pool.get().map_err(DatabaseError::from)?;
+            let result = user
+                .filter(id.eq(&uid))
+                .select(User::as_select())
+                .first(&mut connection)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     pub async fn create_user(&self, user_id: impl AsRef<str>) -> Result<User> {
         use schema::user::dsl::*;
 
-        let mut connection = self.0.get().await?;
-        let result = diesel::insert_into(user)
-            .values(id.eq(user_id.as_ref()))
-            .returning(User::as_returning())
-            .get_result(&mut connection)
-            .await?;
-
-        Ok(result)
+        let pool = self.0.clone();
+        let uid = user_id.as_ref().to_string();
+        task::spawn_blocking(move || -> Result<User> {
+            let mut connection = pool.get().map_err(DatabaseError::from)?;
+            let result = diesel::insert_into(user)
+                .values(id.eq(&uid))
+                .returning(User::as_returning())
+                .get_result(&mut connection)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     pub async fn delete_user(&self, user_id: impl AsRef<str>) -> Result<usize> {
         use schema::user::dsl::*;
 
-        let mut connection = self.0.get().await?;
-        let affected = diesel::delete(user)
-            .filter(id.eq(user_id.as_ref()))
-            .execute(&mut connection)
-            .await?;
-
-        Ok(affected)
+        let pool = self.0.clone();
+        let uid = user_id.as_ref().to_string();
+        task::spawn_blocking(move || -> Result<usize> {
+            let mut connection = pool.get().map_err(DatabaseError::from)?;
+            let affected = diesel::delete(user)
+                .filter(id.eq(&uid))
+                .execute(&mut connection)?;
+            Ok(affected)
+        })
+        .await
+        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     pub async fn get_or_create_user(&self, user_id: impl AsRef<str>) -> Result<User> {
@@ -97,14 +109,19 @@ impl Database {
     ) -> Result<()> {
         use schema::user::dsl::*;
 
-        let mut connection = self.0.get().await?;
-        diesel::update(user)
-            .filter(id.eq(user_id.as_ref()))
-            .set(device_name.eq(_device_name.as_ref()))
-            .execute(&mut connection)
-            .await?;
-
-        Ok(())
+        let pool = self.0.clone();
+        let uid = user_id.as_ref().to_string();
+        let dname = _device_name.as_ref().to_string();
+        task::spawn_blocking(move || -> Result<()> {
+            let mut connection = pool.get().map_err(DatabaseError::from)?;
+            diesel::update(user)
+                .filter(id.eq(&uid))
+                .set(device_name.eq(&dname))
+                .execute(&mut connection)?;
+            Ok(())
+        })
+        .await
+        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     // Account operations
@@ -112,26 +129,34 @@ impl Database {
     pub async fn get_account(&self, _user_id: impl AsRef<str>) -> Result<Account> {
         use schema::account::dsl::*;
 
-        let mut connection = self.0.get().await?;
-        let result = account
-            .select(Account::as_select())
-            .filter(user_id.eq(_user_id.as_ref()))
-            .first(&mut connection)
-            .await?;
-
-        Ok(result)
+        let pool = self.0.clone();
+        let uid = _user_id.as_ref().to_string();
+        task::spawn_blocking(move || -> Result<Account> {
+            let mut connection = pool.get().map_err(DatabaseError::from)?;
+            let result = account
+                .select(Account::as_select())
+                .filter(user_id.eq(&uid))
+                .first(&mut connection)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     pub async fn delete_account(&self, _user_id: impl AsRef<str>) -> Result<usize> {
         use schema::account::dsl::*;
 
-        let mut connection = self.0.get().await?;
-        let affected = diesel::delete(account)
-            .filter(user_id.eq(_user_id.as_ref()))
-            .execute(&mut connection)
-            .await?;
-
-        Ok(affected)
+        let pool = self.0.clone();
+        let uid = _user_id.as_ref().to_string();
+        task::spawn_blocking(move || -> Result<usize> {
+            let mut connection = pool.get().map_err(DatabaseError::from)?;
+            let affected = diesel::delete(account)
+                .filter(user_id.eq(&uid))
+                .execute(&mut connection)?;
+            Ok(affected)
+        })
+        .await
+        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     pub async fn update_session_token(
@@ -141,14 +166,19 @@ impl Database {
     ) -> Result<()> {
         use schema::account::dsl::*;
 
-        let mut connection = self.0.get().await?;
-        diesel::update(account)
-            .filter(user_id.eq(_user_id.as_ref()))
-            .set(session_token.eq(_session_token.as_deref()))
-            .execute(&mut connection)
-            .await?;
-
-        Ok(())
+        let pool = self.0.clone();
+        let uid = _user_id.as_ref().to_string();
+        let token_opt = _session_token.clone();
+        task::spawn_blocking(move || -> Result<()> {
+            let mut connection = pool.get().map_err(DatabaseError::from)?;
+            diesel::update(account)
+                .filter(user_id.eq(&uid))
+                .set(session_token.eq(token_opt.as_deref()))
+                .execute(&mut connection)?;
+            Ok(())
+        })
+        .await
+        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     // Request operations
@@ -156,42 +186,49 @@ impl Database {
     pub async fn get_request(&self, _user_id: impl AsRef<str>) -> Result<LinkRequest> {
         use schema::link_request::dsl::*;
 
-        let mut connection = self.0.get().await?;
-        let result = link_request
-            .select(LinkRequest::as_select())
-            .filter(user_id.eq(_user_id.as_ref()))
-            .first(&mut connection)
-            .await?;
-
-        Ok(result)
+        let pool = self.0.clone();
+        let uid = _user_id.as_ref().to_string();
+        task::spawn_blocking(move || -> Result<LinkRequest> {
+            let mut connection = pool.get()?;
+            let result = link_request
+                .select(LinkRequest::as_select())
+                .filter(user_id.eq(&uid))
+                .first(&mut connection)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     /// Create a new link request that expires after an hour
     pub async fn create_request(&self, _user_id: impl AsRef<str>) -> Result<LinkRequest> {
         use schema::link_request::dsl::*;
 
-        let mut connection = self.0.get().await?;
-        let _token: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(64)
-            .map(char::from)
-            .collect();
-        let _expires = (Utc::now() + Duration::hours(1)).naive_utc();
-
-        let request = diesel::insert_into(link_request)
-            .values((
-                user_id.eq(_user_id.as_ref()),
-                token.eq(&_token),
-                expires.eq(_expires),
-            ))
-            .on_conflict(user_id)
-            .do_update()
-            .set((token.eq(&_token), expires.eq(_expires)))
-            .returning(LinkRequest::as_returning())
-            .get_result(&mut connection)
-            .await?;
-
-        Ok(request)
+        let pool = self.0.clone();
+        let uid = _user_id.as_ref().to_string();
+        task::spawn_blocking(move || -> Result<LinkRequest> {
+            let mut connection = pool.get()?;
+            let _token: String = rand::thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(64)
+                .map(char::from)
+                .collect();
+            let _expires = (Utc::now() + Duration::hours(1)).naive_utc();
+            let request = diesel::insert_into(link_request)
+                .values((
+                    user_id.eq(&uid),
+                    token.eq(&_token),
+                    expires.eq(_expires),
+                ))
+                .on_conflict(user_id)
+                .do_update()
+                .set((token.eq(&_token), expires.eq(_expires)))
+                .returning(LinkRequest::as_returning())
+                .get_result(&mut connection)?;
+            Ok(request)
+        })
+        .await
+        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     // Special operations
@@ -201,42 +238,62 @@ impl Database {
     pub async fn get_access_token(&self, _user_id: impl AsRef<str>) -> Result<String> {
         use schema::account::dsl::*;
 
-        let mut connection = self.0.get().await?;
-        let mut result: Account = account
-            .filter(user_id.eq(_user_id.as_ref()))
-            .select(Account::as_select())
-            .first(&mut connection)
-            .await?;
+        let uid = _user_id.as_ref().to_string();
+        let pool = self.0.clone();
+        let mut result: Account = task::spawn_blocking({
+            let pool = pool.clone();
+            let uid = uid.clone();
+            move || -> Result<Account> {
+                let mut connection = pool.get().map_err(DatabaseError::from)?;
+                let result = account
+                    .filter(user_id.eq(&uid))
+                    .select(Account::as_select())
+                    .first(&mut connection)?;
+                Ok(result)
+            }
+        })
+        .await
+        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))??;
 
-        // If the token has expired, refresh it automatically
         if result.expired_offset(Duration::minutes(1)) {
+            let refresh_token_value = result.refresh_token.clone();
             let spotify = spoticord_config::get_spotify(Token {
-                refresh_token: Some(result.refresh_token),
+                refresh_token: Some(refresh_token_value),
                 ..Default::default()
             });
 
             let token = match spotify.refetch_token().await {
                 Ok(Some(token)) => token,
                 _ => {
-                    self.delete_account(_user_id.as_ref()).await.ok();
-
+                    self.delete_account(&uid).await.ok();
                     return Err(DatabaseError::RefreshTokenFailure);
                 }
             };
 
-            result = diesel::update(account)
-                .filter(user_id.eq(_user_id.as_ref()))
-                .set((
-                    access_token.eq(&token.access_token),
-                    refresh_token.eq(token.refresh_token.as_deref().unwrap_or("")),
-                    expires.eq(&token
-                        .expires_at
-                        .expect("token expires_at is none, we broke time")
-                        .naive_utc()),
-                ))
-                .returning(Account::as_returning())
-                .get_result(&mut connection)
-                .await?;
+            let pool2 = pool.clone();
+            let uid2 = uid.clone();
+            let access_token_val = token.access_token.clone();
+            let refresh_token_val = token.refresh_token.clone();
+            let expires_val = token
+                .expires_at
+                .expect("token expires_at is none, we broke time")
+                .naive_utc();
+
+            result = task::spawn_blocking(move || -> Result<Account> {
+                let mut connection = pool2.get().map_err(DatabaseError::from)?;
+                let updated = diesel::update(account)
+                    .filter(user_id.eq(&uid2))
+                    .set((
+                        access_token.eq(&access_token_val),
+                        refresh_token.eq(refresh_token_val.as_deref().unwrap_or("")),
+                        expires.eq(&expires_val),
+                    ))
+                    .returning(Account::as_returning())
+                    .get_result(&mut connection)?;
+                Ok(updated)
+            })
+            .await
+            .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))??;
         }
 
         Ok(result.access_token)
