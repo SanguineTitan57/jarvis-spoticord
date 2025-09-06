@@ -1,5 +1,5 @@
 # -------- Build Stage --------
-FROM rust:1.77-bullseye AS build
+FROM rust:1.80-bullseye AS build
 
 WORKDIR /app
 
@@ -30,7 +30,7 @@ ENV TARGETPLATFORM=${TARGETPLATFORM}
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
-    libssl1.1 \
+    libssl3 \
     ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
