@@ -1,0 +1,4 @@
+project = "spoticord"
+
+[deploy]
+dockerfile = "Dockerfile"
