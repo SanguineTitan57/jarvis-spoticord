@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     cmake \
     nasm \
-    aarch64-linux-gnu-gcc \
+    gcc-aarch64-linux-gnu \
+    g++-aarch64-linux-gnu \
     gcc-multilib \
  && rm -rf /var/lib/apt/lists/*
 
