@@ -1,5 +1,5 @@
 # -------- Build Stage --------
-FROM rust:1.77-bullseye AS builder
+FROM rust:1.77-bullseye AS build
 
 WORKDIR /app
 
@@ -35,8 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
 # Copy correct binary for the architecture
-COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/spoticord /tmp/x86_64
-COPY --from=builder /app/target/aarch64-unknown-linux-gnu/release/spoticord /tmp/aarch64
+COPY --from=build /app/target/x86_64-unknown-linux-gnu/release/spoticord /tmp/x86_64
+COPY --from=build /app/target/aarch64-unknown-linux-gnu/release/spoticord /tmp/aarch64
 
 RUN if [ "${TARGETPLATFORM}" = "linux/amd64" ]; then \
         cp /tmp/x86_64 /usr/local/bin/spoticord; \
