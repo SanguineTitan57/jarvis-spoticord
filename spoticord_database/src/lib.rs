@@ -16,6 +16,34 @@ use rand::{distributions::Alphanumeric, Rng};
 use rspotify::{clients::BaseClient, Token};
 use tokio::task;
 
+/// Helper to retry database operations that fail due to Neon invalidating prepared statements
+async fn retry_on_prepared_statement_error<F, R>(operation: F) -> Result<R>
+where
+    F: Fn() -> Result<R> + Send + 'static + Clone,
+    R: Send + 'static,
+{
+    let op_clone = operation.clone();
+    let result = task::spawn_blocking(operation)
+        .await
+        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?;
+
+    match result {
+        Err(DatabaseError::Diesel(diesel::result::Error::DatabaseError(
+            diesel::result::DatabaseErrorKind::Unknown,
+            ref info,
+        ))) if info
+            .message()
+            .contains("unnamed prepared statement does not exist") =>
+        {
+            // Retry once - the prepared statement should be recreated
+            task::spawn_blocking(op_clone)
+                .await
+                .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
+        }
+        other => other,
+    }
+}
+
 #[derive(Clone)]
 pub struct Database(Arc<Pool<ConnectionManager<PgConnection>>>);
 
@@ -28,8 +56,12 @@ impl Database {
         // Neon + sync diesel can encounter ephemeral prepared statement invalidation.
         // Disable statement cache so diesel doesn't reuse dropped prepared statements.
         std::env::set_var("DIESEL_STATEMENT_CACHE_SIZE", "0");
-        let manager = ConnectionManager::<PgConnection>::new(database_url);
+        // Use single connection to avoid prepared statement conflicts between connections
+        let effective_url = database_url.to_string();
+        let manager = ConnectionManager::<PgConnection>::new(effective_url);
         let pool = Pool::builder()
+            .max_size(1) // Single connection eliminates prepared statement conflicts
+            .connection_timeout(std::time::Duration::from_secs(30))
             .build(manager)
             .map_err(DatabaseError::from)?;
 
@@ -56,7 +88,7 @@ impl Database {
 
         let pool = self.0.clone();
         let uid = user_id.as_ref().to_string();
-        task::spawn_blocking(move || -> Result<User> {
+        retry_on_prepared_statement_error(move || -> Result<User> {
             let mut connection = pool.get().map_err(DatabaseError::from)?;
             let result = user
                 .filter(id.eq(&uid))
@@ -65,7 +97,6 @@ impl Database {
             Ok(result)
         })
         .await
-        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     pub async fn create_user(&self, user_id: impl AsRef<str>) -> Result<User> {
@@ -73,7 +104,7 @@ impl Database {
 
         let pool = self.0.clone();
         let uid = user_id.as_ref().to_string();
-        task::spawn_blocking(move || -> Result<User> {
+        retry_on_prepared_statement_error(move || -> Result<User> {
             let mut connection = pool.get().map_err(DatabaseError::from)?;
             let result = diesel::insert_into(user)
                 .values(id.eq(&uid))
@@ -82,7 +113,6 @@ impl Database {
             Ok(result)
         })
         .await
-        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     pub async fn delete_user(&self, user_id: impl AsRef<str>) -> Result<usize> {
@@ -90,7 +120,7 @@ impl Database {
 
         let pool = self.0.clone();
         let uid = user_id.as_ref().to_string();
-        task::spawn_blocking(move || -> Result<usize> {
+        retry_on_prepared_statement_error(move || -> Result<usize> {
             let mut connection = pool.get().map_err(DatabaseError::from)?;
             let affected = diesel::delete(user)
                 .filter(id.eq(&uid))
@@ -98,7 +128,6 @@ impl Database {
             Ok(affected)
         })
         .await
-        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     pub async fn get_or_create_user(&self, user_id: impl AsRef<str>) -> Result<User> {
@@ -118,7 +147,7 @@ impl Database {
         let pool = self.0.clone();
         let uid = user_id.as_ref().to_string();
         let dname = _device_name.as_ref().to_string();
-        task::spawn_blocking(move || -> Result<()> {
+        retry_on_prepared_statement_error(move || -> Result<()> {
             let mut connection = pool.get().map_err(DatabaseError::from)?;
             diesel::update(user)
                 .filter(id.eq(&uid))
@@ -127,7 +156,6 @@ impl Database {
             Ok(())
         })
         .await
-        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     // Account operations
@@ -137,7 +165,7 @@ impl Database {
 
         let pool = self.0.clone();
         let uid = _user_id.as_ref().to_string();
-        task::spawn_blocking(move || -> Result<Account> {
+        retry_on_prepared_statement_error(move || -> Result<Account> {
             let mut connection = pool.get().map_err(DatabaseError::from)?;
             let result = account
                 .select(Account::as_select())
@@ -146,7 +174,6 @@ impl Database {
             Ok(result)
         })
         .await
-        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     pub async fn delete_account(&self, _user_id: impl AsRef<str>) -> Result<usize> {
@@ -154,7 +181,7 @@ impl Database {
 
         let pool = self.0.clone();
         let uid = _user_id.as_ref().to_string();
-        task::spawn_blocking(move || -> Result<usize> {
+        retry_on_prepared_statement_error(move || -> Result<usize> {
             let mut connection = pool.get().map_err(DatabaseError::from)?;
             let affected = diesel::delete(account)
                 .filter(user_id.eq(&uid))
@@ -162,7 +189,6 @@ impl Database {
             Ok(affected)
         })
         .await
-        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     pub async fn update_session_token(
@@ -175,7 +201,7 @@ impl Database {
         let pool = self.0.clone();
         let uid = _user_id.as_ref().to_string();
         let token_opt = _session_token.clone();
-        task::spawn_blocking(move || -> Result<()> {
+        retry_on_prepared_statement_error(move || -> Result<()> {
             let mut connection = pool.get().map_err(DatabaseError::from)?;
             diesel::update(account)
                 .filter(user_id.eq(&uid))
@@ -184,7 +210,6 @@ impl Database {
             Ok(())
         })
         .await
-        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     // Request operations
@@ -194,7 +219,7 @@ impl Database {
 
         let pool = self.0.clone();
         let uid = _user_id.as_ref().to_string();
-        task::spawn_blocking(move || -> Result<LinkRequest> {
+        retry_on_prepared_statement_error(move || -> Result<LinkRequest> {
             let mut connection = pool.get()?;
             let result = link_request
                 .select(LinkRequest::as_select())
@@ -203,7 +228,6 @@ impl Database {
             Ok(result)
         })
         .await
-        .map_err(|_| DatabaseError::Diesel(diesel::result::Error::RollbackTransaction))?
     }
 
     /// Create a new link request that expires after an hour
