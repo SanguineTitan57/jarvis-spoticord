@@ -21,10 +21,12 @@ RUN cargo build --release
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
+# Install libpq5 plus ca-certificates and libssl3
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     libssl3 \
     ca-certificates \
+    curl \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/spoticord /usr/local/bin/spoticord
