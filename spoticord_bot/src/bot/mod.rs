@@ -9,7 +9,7 @@ use spoticord_session::manager::SessionManager;
 
 use crate::commands;
 
-#[cfg(feature = "stats")]
+#[cfg(feature = "spoticord_stats")]
 use spoticord_stats::StatsManager;
 
 pub type Context<'a> = poise::Context<'a, Data, anyhow::Error>;
@@ -67,13 +67,13 @@ pub async fn setup(
 
     let manager = SessionManager::new(songbird, database);
 
-    #[cfg(feature = "stats")]
+    #[cfg(feature = "spoticord_stats")]
     let stats = StatsManager::new(spoticord_config::kv_url())?;
 
     tokio::spawn(background_loop(
         manager.clone(),
         framework.shard_manager().clone(),
-        #[cfg(feature = "stats")]
+        #[cfg(feature = "spoticord_stats")]
         stats,
     ));
 
@@ -103,15 +103,15 @@ async fn event_handler(
 async fn background_loop(
     session_manager: SessionManager,
     shard_manager: Arc<ShardManager>,
-    #[cfg(feature = "stats")] mut stats_manager: spoticord_stats::StatsManager,
+    #[cfg(feature = "spoticord_stats")] mut stats_manager: spoticord_stats::StatsManager,
 ) {
-    #[cfg(feature = "stats")]
+    #[cfg(feature = "spoticord_stats")]
     use log::error;
 
     loop {
         tokio::select! {
             _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-                #[cfg(feature = "stats")]
+                #[cfg(feature = "spoticord_stats")]
                 {
                     debug!("Retrieving active sessions count for stats");
 
@@ -137,7 +137,7 @@ async fn background_loop(
                 session_manager.shutdown_all().await;
                 shard_manager.shutdown_all().await;
 
-                #[cfg(feature = "stats")]
+                #[cfg(feature = "spoticord_stats")]
                 stats_manager.set_active_count(0).ok();
 
 

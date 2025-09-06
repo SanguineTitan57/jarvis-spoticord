@@ -33,6 +33,16 @@ impl Database {
         Ok(Self(Arc::new(pool)))
     }
 
+    pub async fn connect_with_url(database_url: &str) -> Result<Self> {
+        let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url);
+        let pool = Pool::builder(config).build()?;
+
+        let mut conn = pool.get().await?;
+        migrations::run_migrations(&mut conn).await?;
+
+        Ok(Self(Arc::new(pool)))
+    }
+
     // User operations
 
     pub async fn get_user(&self, user_id: impl AsRef<str>) -> Result<User> {
