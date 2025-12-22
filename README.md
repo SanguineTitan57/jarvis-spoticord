@@ -4,6 +4,13 @@ Spoticord is a Discord music bot that allows you to control your music using the
 Spoticord is built on top of [librespot](https://github.com/librespot-org/librespot) (with tiny additional changes), to allow full control using the Spotify client, with [serenity](https://github.com/serenity-rs/serenity) and [songbird](https://github.com/serenity-rs/songbird) for Discord communication.
 Being built on top of rust, Spoticord is relatively lightweight and can run on low-spec hardware.
 
+## Note 
+This project is forked from the original Spoticord repository, with specific features like continuous play (the original bo would auto disconnect after 15 min of inactivity). 
+
+It is specifically configured to run on the [Shuttle](https://www.shuttle.dev) Cloud provider, which offers cloud computing for Rust applications/bots.
+
+Chances that it will not work for those self hosting or on other VPS providers are very high.
+
 ## How to use
 
 ### Official bot
